@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Simulador de Negocios — Versión Simple</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <meta name="description" content="Simulador didáctico de negocios: compra/venta, toma de decisiones, trato al cliente, riesgo y manejo de personal." />
+</head>
+<body class="bg-slate-50">
+  <div id="root"></div>
+
+  <!-- React 18 UMD + Babel for in-browser JSX compilation -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useMemo, useState } = React;
+
+    const initialState = {
+      ronda: 0,
+      rondasTotales: 8,
+      cash: 1000,
+      customer: 60,
+      morale: 60,
+      risk: 40,
+      decisionSkill: 50,
+      history: [],
+    };
+
+    const clamp = (v, min = 0, max = 100) => Math.max(min, Math.min(max, v));
+
+    const kpiColor = (val) => {
+      if (val >= 75) return "bg-green-500";
+      if (val >= 40) return "bg-yellow-500";
+      return "bg-red-500";
+    };
+
+    const moneyFmt = (n) => n.toLocaleString("es-MX", { style: "currency", currency: "MXN" });
+
+    const ESCENARIOS_BASE = [
+      {
+        concepto: "Toma de decisiones",
+        texto: "Tu proveedor ofrece un descuento del 10% si pagas hoy, pero limitará tu liquidez para la semana.",
+        opciones: [
+          { label: "Aceptar el descuento y pagar hoy", efectos: { cash: -200, decisionSkill: +8, risk: +5, customer: +0, morale: +0 }, resumen: "Ahorras en costo unitario, pero te quedas con menos efectivo." },
+          { label: "Negociar pago parcial hoy y el resto en 7 días", efectos: { cash: -120, decisionSkill: +10, risk: -2, customer: +0, morale: +0 }, resumen: "Balanceas liquidez y descuento: buena decisión estratégica." },
+          { label: "Rechazar y mantener liquidez", efectos: { cash: 0, decisionSkill: +3, risk: -4, customer: 0, morale: 0 }, resumen: "Liquidez intacta, pero pierdes ahorro en costos." }
+        ]
+      },
+      {
+        concepto: "Trato al cliente",
+        texto: "Un cliente se queja por una entrega retrasada. Pide una solución inmediata.",
+        opciones: [
+          { label: "Ofrecer disculpa + envío exprés gratuito", efectos: { cash: -80, customer: +15, morale: +2, risk: -2, decisionSkill: +4 }, resumen: "Recuperas confianza del cliente con costo moderado." },
+          { label: "Descuento del 10% en próxima compra", efectos: { cash: -0, customer: +8, morale: +1, risk: 0, decisionSkill: +3 }, resumen: "Mejora la lealtad futura sin gasto hoy." },
+          { label: "Explicar la causa y no ofrecer nada", efectos: { cash: 0, customer: -12, morale: 0, risk: +4, decisionSkill: -2 }, resumen: "Minimiza costos ahora, pero puede afectar reputación." }
+        ]
+      },
+      {
+        concepto: "Decisiones de riesgo",
+        texto: "Surge la oportunidad de lanzar un producto nuevo sin validar totalmente la demanda.",
+        opciones: [
+          { label: "Piloto pequeño en una zona", efectos: { cash: -150, risk: -8, decisionSkill: +9, customer: +3, morale: +1 }, resumen: "Aprendes barato y reduces riesgo con datos reales." },
+          { label: "Lanzamiento a gran escala", efectos: { cash: -500, risk: +15, decisionSkill: +2, customer: +6, morale: +3 }, resumen: "Potencial alto pero exposición grande al riesgo." },
+          { label: "Esperar para investigar más", efectos: { cash: 0, risk: -4, decisionSkill: +5, customer: 0, morale: 0 }, resumen: "Prudencia: reduces riesgo pero retrasas aprendizaje." }
+        ]
+      },
+      {
+        concepto: "Manejo de personal",
+        texto: "Dos colaboradores tienen conflicto por la distribución de turnos.",
+        opciones: [
+          { label: "Mediar con reglas claras y rotación justa", efectos: { morale: +12, customer: +3, risk: -2, decisionSkill: +6, cash: 0 }, resumen: "La claridad de reglas mejora clima laboral y servicio." },
+          { label: "Dar preferencia al de mejor desempeño", efectos: { morale: -6, customer: +2, risk: +2, decisionSkill: +3, cash: 0 }, resumen: "Premias resultados pero puede afectar equidad." },
+          { label: "Ignorar el tema y que lo resuelvan entre ellos", efectos: { morale: -10, customer: -3, risk: +4, decisionSkill: -3, cash: 0 }, resumen: "El conflicto se enquista y afecta al equipo." }
+        ]
+      },
+      {
+        concepto: "Compra y venta",
+        texto: "Un cliente mayorista quiere 100 unidades si bajas el precio 8%.",
+        opciones: [
+          { label: "Aceptar el 8% y pedir pago por adelantado", efectos: { cash: +400, customer: +6, morale: +2, risk: -2, decisionSkill: +5 }, resumen: "Aseguras flujo y volumen con margen reducido." },
+          { label: "Contraoferta: 5% y entrega parcial", efectos: { cash: +300, customer: +5, morale: +2, risk: -1, decisionSkill: +7 }, resumen: "Negociación flexible protege márgenes." },
+          { label: "Mantener precio y ofrecer valor agregado", efectos: { cash: +120, customer: +4, morale: +1, risk: 0, decisionSkill: +4 }, resumen: "Vendes menos hoy pero sostienes percepción de valor." }
+        ]
+      },
+      {
+        concepto: "Toma de decisiones",
+        texto: "Debes elegir entre invertir en marketing digital o en capacitación interna.",
+        opciones: [
+          { label: "Marketing digital (campaña 2 semanas)", efectos: { cash: -250, customer: +10, decisionSkill: +5, risk: +1, morale: 0 }, resumen: "Mejora demanda de corto plazo." },
+          { label: "Capacitación interna (servicio al cliente)", efectos: { cash: -250, customer: +6, decisionSkill: +7, risk: -1, morale: +6 }, resumen: "Refuerza capacidades y clima laboral." }
+        ]
+      },
+      {
+        concepto: "Trato al cliente",
+        texto: "Un cliente VIP pide atención fuera de horario habitual.",
+        opciones: [
+          { label: "Atenderlo con cargo extra", efectos: { cash: +120, customer: +6, morale: -2, risk: 0, decisionSkill: +3 }, resumen: "Ingresos extra; cuida no sobrecargar al equipo." },
+          { label: "Rechazar amablemente y proponer cita próxima", efectos: { cash: 0, customer: +2, morale: +2, risk: 0, decisionSkill: +3 }, resumen: "Mantienes límites y relación cordial." }
+        ]
+      },
+      {
+        concepto: "Decisiones de riesgo",
+        texto: "Proveedor nuevo ofrece precios 20% menores sin referencias verificables.",
+        opciones: [
+          { label: "Prueba con orden pequeña y garantía por escrito", efectos: { cash: -100, risk: -6, decisionSkill: +8, customer: 0, morale: 0 }, resumen: "Gestionas el riesgo con control y contrato." },
+          { label: "Cambiar todo a ese proveedor ya", efectos: { cash: -300, risk: +12, decisionSkill: +1, customer: -3, morale: -2 }, resumen: "Ahorro alto pero exposición grande a fallas." }
+        ]
+      },
+      {
+        concepto: "Manejo de personal",
+        texto: "Necesitas elegir a un encargado de turno entre dos candidatos similares.",
+        opciones: [
+          { label: "Elegir con evaluación 360° y periodo de prueba", efectos: { morale: +8, customer: +3, risk: -3, decisionSkill: +7, cash: -30 }, resumen: "Proceso justo mejora compromiso y reduce errores." },
+          { label: "Elegir al más antiguo sin evaluación", efectos: { morale: +2, customer: +1, risk: 0, decisionSkill: +1, cash: 0 }, resumen: "Solución rápida con menor aprendizaje." }
+        ]
+      },
+      {
+        concepto: "Compra y venta",
+        texto: "Tienes inventario lento. ¿Qué haces para convertirlo en efectivo?",
+        opciones: [
+          { label: "Paquetes combinados con productos de alta rotación", efectos: { cash: +180, customer: +4, morale: +1, risk: -1, decisionSkill: +5 }, resumen: "Mezclas valor y liberas efectivo." },
+          { label: "Descuento agresivo del 30%", efectos: { cash: +220, customer: +2, morale: 0, risk: 0, decisionSkill: +3 }, resumen: "Liquidas rápido pero reduces margen." }
+        ]
+      },
+    ];
+
+    const buildScenarioDeck = () => {
+      const base = [...ESCENARIOS_BASE];
+      for (let i = base.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [base[i], base[j]] = [base[j], base[i]];
+      }
+      return base;
+    };
+
+    function SimuladorNegocios() {
+      const [state, setState] = useState(initialState);
+      const [deck, setDeck] = useState(buildScenarioDeck());
+      const [feedback, setFeedback] = useState("");
+      const [activeTab, setActiveTab] = useState("escenarios");
+      const [showHistory, setShowHistory] = useState(false);
+
+      const progreso = useMemo(() => {
+        return Math.round((state.ronda / state.rondasTotales) * 100);
+      }, [state.ronda, state.rondasTotales]);
+
+      const kpis = [
+        { key: "cash", label: "Efectivo", value: state.cash, isMoney: true },
+        { key: "customer", label: "Satisfacción Cliente", value: clamp(state.customer) },
+        { key: "morale", label: "Moral del Personal", value: clamp(state.morale) },
+        { key: "risk", label: "Riesgo (↓ mejor)", value: clamp(state.risk) },
+        { key: "decisionSkill", label: "Habilidad de Decisión", value: clamp(state.decisionSkill) },
+      ];
+
+      const escenarioActual = deck[state.ronda];
+
+      const aplicarEfectos = (esc, opcion) => {
+        const e = opcion.efectos || {};
+        const next = {
+          ...state,
+          cash: state.cash + (e.cash || 0),
+          customer: clamp(state.customer + (e.customer || 0)),
+          morale: clamp(state.morale + (e.morale || 0)),
+          risk: clamp(state.risk + (e.risk || 0)),
+          decisionSkill: clamp(state.decisionSkill + (e.decisionSkill || 0)),
+          history: [
+            ...state.history,
+            { concepto: esc.concepto, decision: opcion.label, efecto: opcion.efectos, resumen: opcion.resumen },
+          ],
+        };
+        setState(next);
+        setFeedback(\`\${esc.concepto}: \${opcion.resumen}\`);
+      };
+
+      const siguiente = () => {
+        if (state.ronda + 1 >= state.rondasTotales) return;
+        setState((s) => ({ ...s, ronda: s.ronda + 1 }));
+        setFeedback("");
+      };
+
+      const reiniciar = () => {
+        setDeck(buildScenarioDeck());
+        setState({ ...initialState });
+        setFeedback("");
+        setActiveTab("escenarios");
+        setShowHistory(false);
+      };
+
+      const [cvPrecio, setCvPrecio] = useState(20);
+      const [cvCosto, setCvCosto] = useState(12);
+      const [cvCompra, setCvCompra] = useState(80);
+      const demanda = useMemo(() => {
+        const base = 120;
+        const sens = 3;
+        const d = Math.max(0, Math.round(base - sens * cvPrecio + Math.random() * 8 - 4));
+        return d;
+      }, [cvPrecio]);
+
+      const simularOperacion = () => {
+        const vendidas = Math.min(cvCompra, demanda);
+        const ingreso = vendidas * cvPrecio;
+        const costo = cvCompra * cvCosto;
+        const margen = ingreso - costo;
+        const sobrante = Math.max(0, cvCompra - vendidas);
+
+        const customerDelta = vendidas / Math.max(1, cvCompra) > 0.7 ? +4 : -2;
+        const moraleDelta = sobrante === 0 ? +3 : -1;
+        const riskDelta = sobrante > 30 ? +5 : -2;
+
+        setState((s) => ({
+          ...s,
+          cash: s.cash + margen,
+          customer: clamp(s.customer + customerDelta),
+          morale: clamp(s.morale + moraleDelta),
+          risk: clamp(s.risk + riskDelta),
+          decisionSkill: clamp(s.decisionSkill + 2),
+          history: [
+            ...s.history,
+            {
+              concepto: "Compra y venta (módulo)",
+              decision: \`Compré \${cvCompra} a \${moneyFmt(cvCosto)} y vendí \${vendidas} a \${moneyFmt(cvPrecio)}\`,
+              efecto: { cash: margen, customer: customerDelta, morale: moraleDelta, risk: riskDelta, decisionSkill: +2 },
+              resumen: \`Ingreso \${moneyFmt(ingreso)}, costo \${moneyFmt(costo)}, margen \${moneyFmt(margen)}, sobrante \${sobrante}\`,
+            },
+          ],
+        }));
+      };
+
+      const terminado = state.ronda >= state.rondasTotales;
+
+      return (
+        <div className="min-h-screen w-full bg-slate-50 text-slate-800">
+          <header className="sticky top-0 z-10 bg-white/80 backdrop-blur border-b">
+            <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
+              <h1 className="text-2xl md:text-3xl font-bold">Simulador de Negocios — Versión Simple</h1>
+              <div className="flex items-center gap-2">
+                <button onClick={reiniciar} className="px-3 py-2 rounded-2xl bg-slate-900 text-white text-sm shadow">Reiniciar</button>
+              </div>
+            </div>
+          </header>
+
+          <main className="max-w-5xl mx-auto p-4 grid md:grid-cols-3 gap-4">
+            <section className="md:col-span-2 space-y-4">
+              <div className="flex gap-2">
+                {[
+                  { id: "escenarios", label: "Escenarios" },
+                  { id: "compraventa", label: "Módulo Compra/Venta" },
+                ].map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => setActiveTab(t.id)}
+                    className={\`px-4 py-2 rounded-2xl border shadow-sm text-sm \${activeTab === t.id ? "bg-slate-900 text-white" : "bg-white"}\`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+
+              {activeTab === "escenarios" && (
+                <div className="bg-white rounded-2xl p-4 shadow">
+                  {!terminado ? (
+                    <>
+                      <div className="text-xs uppercase tracking-wider text-slate-500 mb-1">
+                        Ronda {state.ronda + 1} de {state.rondasTotales}
+                      </div>
+                      <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden mb-4">
+                        <div className="h-full bg-slate-900" style={{ width: \`\${Math.round((state.ronda / state.rondasTotales) * 100)}%\` }} />
+                      </div>
+
+                      {escenarioActual ? (
+                        <div className="space-y-3">
+                          <div className="inline-flex items-center gap-2">
+                            <span className="inline-block px-3 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-semibold">
+                              {escenarioActual.concepto}
+                            </span>
+                          </div>
+                          <p className="text-lg font-medium">{escenarioActual.texto}</p>
+                          <div className="grid gap-2">
+                            {escenarioActual.opciones.map((op, idx) => (
+                              <button
+                                key={idx}
+                                onClick={() => aplicarEfectos(escenarioActual, op)}
+                                className="text-left px-4 py-3 rounded-xl border hover:shadow transition bg-slate-50"
+                              >
+                                <div className="font-semibold">{op.label}</div>
+                                <div className="text-sm text-slate-600">{op.resumen}</div>
+                              </button>
+                            ))}
+                          </div>
+
+                          <div className="flex items-center justify-between pt-2">
+                            <div className="text-sm text-slate-600">{feedback && \`✔ \${feedback}\`}</div>
+                            <button onClick={siguiente} className="px-4 py-2 rounded-xl bg-slate-900 text-white shadow">Siguiente</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <p>No hay escenario disponible.</p>
+                      )}
+                    </>
+                  ) : (
+                    <div className="space-y-4">
+                      <h2 className="text-xl font-bold">Reporte de la Sesión</h2>
+                      <div className="grid md:grid-cols-2 gap-3">
+                        <div className="p-3 rounded-xl bg-slate-50 border">
+                          <div className="text-sm text-slate-500">Efectivo final</div>
+                          <div className="text-2xl font-bold">{moneyFmt(state.cash)}</div>
+                        </div>
+                        <div className="p-3 rounded-xl bg-slate-50 border">
+                          <div className="text-sm text-slate-500">Indicadores</div>
+                          <div className="text-sm">Satisfacción cliente: <b>{state.customer}</b></div>
+                          <div className="text-sm">Moral personal: <b>{state.morale}</b></div>
+                          <div className="text-sm">Riesgo (↓ mejor): <b>{state.risk}</b></div>
+                          <div className="text-sm">Habilidad decisiones: <b>{state.decisionSkill}</b></div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border overflow-hidden">
+                        <table className="w-full text-sm">
+                          <thead className="bg-slate-100">
+                            <tr>
+                              <th className="text-left p-2">Concepto</th>
+                              <th className="text-left p-2">Decisión</th>
+                              <th className="text-left p-2">Resumen</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {state.history.map((h, i) => (
+                              <tr key={i} className="border-t">
+                                <td className="p-2">{h.concepto}</td>
+                                <td className="p-2">{h.decision}</td>
+                                <td className="p-2 text-slate-600">{h.resumen}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div className="flex gap-2">
+                        <button onClick={() => {
+                          // Reiniciar todo
+                          const deckNew = buildScenarioDeck();
+                          const init = { ...initialState };
+                          window.location.reload();
+                        }} className="px-4 py-2 rounded-xl bg-slate-900 text-white shadow">
+                          Jugar otra vez
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeTab === "compraventa" && (
+                <div className="bg-white rounded-2xl p-4 shadow space-y-4">
+                  <h2 className="text-xl font-bold">Módulo Compra/Venta (rápido)</h2>
+                  <p className="text-sm text-slate-600">
+                    Define <b>cantidad a comprar</b>, <b>costo unitario</b> y <b>precio de venta</b>. La demanda se simula automáticamente.
+                  </p>
+                  <div className="grid md:grid-cols-3 gap-3">
+                    <div className="p-3 rounded-xl border bg-slate-50">
+                      <div className="text-xs text-slate-500 mb-1">Cantidad a comprar</div>
+                      <input type="range" min={20} max={200} value={state.cvCompra ?? 80} onChange={(e)=>{}} className="w-full" />
+                      <div className="font-semibold">Usa los controles de abajo</div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </section>
+
+            <aside className="space-y-4">
+              <div className="bg-white rounded-2xl p-4 shadow">
+                <h3 className="font-bold mb-2">Indicadores (KPI)</h3>
+                <div className="space-y-3">
+                  {kpis.map((k) => (
+                    <div key={k.key}>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span>{k.label}</span>
+                        <span className="font-semibold">{k.isMoney ? moneyFmt(k.value) : k.value}</span>
+                      </div>
+                      {!k.isMoney && (
+                        <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden">
+                          <div className={\`h-full \${kpiColor(k.value)}\`} style={{ width: \`\${k.value}%\` }} />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl p-4 shadow">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-bold">Historial</h3>
+                  <label className="text-sm inline-flex items-center gap-2">
+                    <input type="checkbox" onChange={(e)=>{}} /> Ver
+                  </label>
+                </div>
+                <p className="text-sm text-slate-600">Juega una sesión para ver el historial detallado.</p>
+              </div>
+
+              <button
+                onClick={() => {}}
+                className="w-full px-4 py-2 rounded-xl bg-slate-900 text-white shadow"
+              >Finalizar y ver reporte</button>
+            </aside>
+          </main>
+
+          <footer className="max-w-5xl mx-auto p-4 text-center text-xs text-slate-500">
+            © <span id="year"></span> Simulador didáctico. Conceptos: Compra/Venta, Toma de decisiones, Trato al cliente, Riesgo y Manejo de personal.
+          </footer>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<SimuladorNegocios />);
+
+    document.getElementById("year").textContent = new Date().getFullYear();
+  </script>
+
+</body>
+</html>
